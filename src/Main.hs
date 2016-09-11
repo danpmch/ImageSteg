@@ -4,6 +4,7 @@ import System.Environment
 import Codec.Picture.Png
 import Codec.Picture.Types
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as LB
 
 data StegArg a = StegArg a a
 
@@ -15,7 +16,7 @@ instance Foldable StegArg where
    foldMap f (StegArg a1 a2) = mempty `mappend` (f a1) `mappend` (f a2)
 
 instance Traversable StegArg where
-   traverse f (StegArg a1 a2) = (pure StegArg) <*> (f a1) <*> (f a2)
+   traverse f = sequenceA . fmap f
    sequenceA (StegArg fa1 fa2) = (pure StegArg) <*> fa1 <*> fa2
 
 main :: IO ()
@@ -23,10 +24,10 @@ main = do
    args <- getArgs
    let filenames = parse args
    files <- sequence . fmap getFiles $ filenames
-   let image = files >>= steg
+   let image = files >>= steg >>= encodeDynamicPng
    case image of
-        (Right image) ->
-           writePng "test.png" image
+        (Right imgData) ->
+            LB.writeFile "test.png" imgData
         (Left error) -> putStrLn error
 
 getFiles :: StegArg String -> IO (StegArg B.ByteString)
