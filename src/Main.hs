@@ -3,10 +3,17 @@ module Main where
 import System.Environment
 import Codec.Picture.Png
 import Codec.Picture.Types
+import qualified Data.List as List
+import Data.Word
+import Data.Bits
+import qualified Data.Vector.Storable as Vec
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as LB
 
 data StegArg a = StegArg a a
+
+data Action = Hide (StegArg String)
+            | UnHide String
 
 instance Functor StegArg where
    fmap f (StegArg a1 a2) = StegArg (f a1) (f a2)
@@ -24,8 +31,12 @@ main = do
    args <- getArgs
    let filenames = parse args
    files <- sequence . fmap getFiles $ filenames
-   let image = files >>= steg >>= encodeDynamicPng
+   let image = files >>= steg
+       encodedImage = image >>= encodeDynamicPng
    case image of
+        (Right img) -> putStrLn . imageToString $ img
+        _ -> return ()
+   case encodedImage of
         (Right imgData) ->
             LB.writeFile "test.png" imgData
         (Left error) -> putStrLn error
@@ -37,6 +48,69 @@ parse :: [String] -> Either String (StegArg String)
 parse (fileToHide : fileToHideIn : _) = Right (StegArg fileToHide fileToHideIn)
 parse _ = Left "Usage: ImageSteg  <file to hide>  <file to hide in>"
 
-steg :: StegArg B.ByteString -> Either String Codec.Picture.Types.DynamicImage
-steg (StegArg fileToHide fileToHideIn) = decodePng fileToHide
+steg :: StegArg B.ByteString -> Either String DynamicImage
+steg (StegArg fileToHide fileToHideIn) = do
+   hide <- decodePng fileToHide
+   hidingPlace <- decodePng fileToHideIn
+   return (store hide hidingPlace)
+   where store :: DynamicImage -> DynamicImage -> DynamicImage
+         store (ImageRGBA8 (Image w h v)) (ImageRGBA8 (Image w' h' v')) =
+            let (usedHiding, unusedHiding) = List.genericSplitAt ((Vec.length v) * 4) (Vec.toList v')
+                groups = groupify 4 usedHiding
+                zipped = zip (Vec.toList v) groups
+                hidden = map (\ (value, storage) ->
+                   let vals = wordToList value in
+                       hide vals storage
+                   ) zipped
+                newList = (concat hidden) ++ unusedHiding
+                newVec = Vec.fromList newList
+                in
+                ImageRGBA8 (Image w' h' newVec)
+
+wordToList :: Word8 -> [Word8]
+wordToList word = do
+   bits <- groupify 2 . toBitList $ word
+   return (toWord8 bits)
+
+toWord8 :: [Bool] -> Word8
+toWord8 [False, False] = 0
+toWord8 [False, True] = 1
+toWord8 [True, False] = 2
+toWord8 [True, True] = 3
+toWord8 unknown = error ("toWord8: unexpected input :" ++ (show unknown))
+
+hide :: [Word8] -> [Word8] -> [Word8]
+hide ws @ [w1, w2, w3, w4] rgbs @ [r, g, b, a] =
+   map (\ (w, rgb) -> (truncateWord rgb) + w) (zip ws rgbs)
+hide ws [r, g, b, a] = error ("hide: Wrong number of values to hide: " ++ (show . List.length $ ws))
+hide [w1, w2, w3, w4] rgba = error ("hide: Wrong number of values to hide in: " ++ (show . List.length $ rgba))
+
+truncateWord :: Word8 -> Word8
+truncateWord w = w .&. (complement 3)
+
+groupify :: Integral n => n -> [a] -> [[a]]
+groupify n xs = case List.genericSplitAt n xs of
+                    (xs', []) -> [xs']
+                    (xs', rest) -> xs' : (groupify n rest)
+
+toBitList :: FiniteBits a => a -> [Bool]
+toBitList w = let size = finiteBitSize w in
+               do
+                  index <- [size - 1, (size - 2)..0]
+                  let bit = testBit w index
+                  return bit
+
+imageToString :: DynamicImage -> String
+imageToString (ImageY8 _) = "ImageY8"
+imageToString (ImageY16 _) = "ImageY16"
+imageToString (ImageYF _) = "ImageYF"
+imageToString (ImageYA8 _) = "ImageYA8"
+imageToString (ImageYA16 _) = "ImageYA16"
+imageToString (ImageRGB8 _) = "ImageRGB8"
+imageToString (ImageRGB16 _) = "ImageRGB16"
+imageToString (ImageRGBF _) = "ImageRGBF"
+imageToString (ImageRGBA8 _) = "ImageRGBA8"
+imageToString (ImageRGBA16 _) = "ImageRGBA16"
+imageToString (ImageCMYK8 _) = "ImageCMYK8"
+imageToString (ImageCMYK16 _) = "ImageCMYK16"
 
