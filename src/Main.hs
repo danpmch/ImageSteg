@@ -45,7 +45,7 @@ doHide filenames = do
         _ -> return ()
    case encodedImage of
         (Right imgData) ->
-            LB.writeFile "test.png" imgData
+            LB.writeFile "hidden.png" imgData
         (Left error) -> putStrLn error
 
 doUnHide :: String -> IO ()
@@ -55,7 +55,7 @@ doUnHide filename = do
        encodedImage = image >>= encodeDynamicPng
    case encodedImage of
         (Right imgData) ->
-           LB.writeFile "untest.png" imgData
+           LB.writeFile "unhidden.png" imgData
         (Left error) -> putStrLn error
 
 getFiles :: StegArg String -> IO (StegArg B.ByteString)
@@ -70,12 +70,16 @@ steg :: StegArg B.ByteString -> Either String DynamicImage
 steg (StegArg fileToHide fileToHideIn) = do
    hide <- decodePng fileToHide
    hidingPlace <- decodePng fileToHideIn
-   return (store hide hidingPlace)
-   where store :: DynamicImage -> DynamicImage -> DynamicImage
+   store hide hidingPlace
+   where store :: DynamicImage -> DynamicImage -> Either String DynamicImage
          store (ImageRGBA8 (Image w h v)) (ImageRGBA8 (Image w' h' v')) =
-            let (usedHiding, unusedHiding) = List.genericSplitAt ((Vec.length v) * 4) (Vec.toList v')
+            let listV = Vec.toList v
+                encodedWidth = intToWord8 w
+                encodedHeight = intToWord8 h
+                augmentedV = encodedWidth ++ encodedHeight ++ listV
+                (usedHiding, unusedHiding) = List.genericSplitAt ((List.length augmentedV) * 4) (Vec.toList v')
                 groups = groupify 4 usedHiding
-                zipped = zip (Vec.toList v) groups
+                zipped = zip augmentedV groups
                 hidden = map (\ (value, storage) ->
                    let vals = wordToList value in
                        hide vals storage
@@ -83,19 +87,24 @@ steg (StegArg fileToHide fileToHideIn) = do
                 newList = (concat hidden) ++ unusedHiding
                 newVec = Vec.fromList newList
                 in
-                ImageRGBA8 (Image w' h' newVec)
+                Right . ImageRGBA8 $ (Image w' h' newVec)
+         store img (ImageRGBA8 _) = Left ("Image to hide has unsupported file encoding: " ++ (imageToString img))
+         store (ImageRGBA8 _) img = Left ("Image to hide in has unsupported file encoding: " ++ (imageToString img))
 
 unsteg :: B.ByteString -> Either String DynamicImage
 unsteg filename = do
    file <- decodePng filename
    return (unhide file)
    where unhide :: DynamicImage -> DynamicImage
-         unhide (ImageRGBA8 (Image w h v)) =
-            let groups = groupify 4 (Vec.toList v)
+         unhide (ImageRGBA8 (Image _ _ v)) =
+            let listV = Vec.toList v
+                groups = groupify 4 listV
                 words = map unhideWord groups
-                newVec = Vec.fromList words
+                (words', width) = extractInt words
+                (words'', height) = extractInt words'
+                newVec = Vec.fromList words''
                 in
-                ImageRGBA8 (Image w h newVec)
+                ImageRGBA8 (Image width height newVec)
 
 wordToList :: Word8 -> [Word8]
 wordToList word = do
@@ -139,6 +148,34 @@ toBitList w = let size = finiteBitSize w in
                   index <- [size - 1, (size - 2)..0]
                   let bit = testBit w index
                   return bit
+
+intToWord8 :: Int -> [Word8]
+intToWord8 i =
+   let totalBits = finiteBitSize i
+       word8bits = finiteBitSize (0 :: Word8)
+       shifts = [(totalBits - (1 * word8bits)),(totalBits - (2 * word8bits))..0]
+       in
+       map (\ shiftVal -> fromIntegral (shift i (-shiftVal)) ) shifts
+
+wordsToInt :: [Word8] -> Int
+wordsToInt words =
+   let word8bits = finiteBitSize (0 :: Word8)
+       totalWords = List.length words
+       shifts = [(totalWords - 1) * word8bits, ((totalWords - 2) * word8bits)..0]
+       wordShifts = (zip words shifts)
+       intWords = map (\ (word, shiftVal) -> shift (fromIntegral word) shiftVal) wordShifts
+       in
+       sum intWords
+
+extractInt :: [Word8] -> ([Word8], Int)
+extractInt words =
+   let totalBits = finiteBitSize (0 :: Int)
+       word8bits = finiteBitSize (0 :: Word8)
+       totalWords = totalBits `quot` word8bits
+       (intWords, rest) = List.genericSplitAt totalWords words
+       in
+       ( rest, (wordsToInt intWords) )
+
 
 imageToString :: DynamicImage -> String
 imageToString (ImageY8 _) = "ImageY8"
