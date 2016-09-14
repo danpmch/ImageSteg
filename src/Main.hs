@@ -8,12 +8,11 @@ import Data.Word
 import Data.Bits
 import qualified Data.Vector.Storable as Vec
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as LB
+import Debug.Trace
 
 data StegArg a = StegArg a a
-
-data Action = Hide (StegArg String)
-            | UnHide String
 
 instance Functor StegArg where
    fmap f (StegArg a1 a2) = StegArg (f a1) (f a2)
@@ -26,18 +25,68 @@ instance Traversable StegArg where
    traverse f = sequenceA . fmap f
    sequenceA (StegArg fa1 fa2) = (pure StegArg) <*> fa1 <*> fa2
 
+data Action = Hide (StegArg File)
+            | UnHide File
+
+class Hideable a where
+   toWords :: a -> [Word8]
+   fromWords :: [Word8] -> Either String ([Word8], a)
+
+data File = File { filename :: String
+                 , content :: LB.ByteString
+                 }
+
+instance Hideable File where
+   toWords file = ( nameLength ++ name ) ++ ( fileLength ++ fileContent )
+      where rawName = filename file
+            rawNameLength = List.length rawName
+            nameLength = intToWord8 rawNameLength
+            name = B.unpack . C.pack . take rawNameLength $ rawName
+            fileContent = LB.unpack . content $ file
+            fileLength = intToWord8 . List.length $ fileContent
+
+   fromWords [] = Left "Not enough data to reconstruct file"
+   fromWords _ | trace "fromWords" False = undefined
+   fromWords words = do
+      (words', nameLength) <- trace "Getting nameLength" (let result @ (w, i) = extractInt words in
+                                  {-if List.length w < i
+                                     then fail
+                                     else-} Right result)
+      (name, words'') <- trace "Getting name" (let (n, w) = splitAt nameLength words' in
+                             {-if w == []
+                                then fail
+                                else -}let name = C.unpack . B.pack $ n in
+                                         Right (name, w))
+      (words''', fileLength) <- trace "Getting fileLength" (let result @ (words, i) = extractInt words'' in
+                                    {-if List.length words < i
+                                       then fail
+                                       else -}Right result)
+      let (c, remainder) = trace "Getting content" (splitAt fileLength words''')
+          content = LB.pack c
+      return (remainder, File name content)
+      where fail = Left "Not enough data to reconstruct file"
+
+getFile :: String -> IO File
+getFile filename = do
+   content <- LB.readFile filename
+   return (File filename content)
+
+fileToPng :: File -> Either String DynamicImage
+fileToPng = decodePng . B.concat . LB.toChunks . content
+
 main :: IO ()
 main = do
    args <- getArgs
-   let action = parse args
+   files <- mapM getFile args
+   let action = parse files
    case action of
         (Right (Hide filenames)) -> doHide filenames
         (Right (UnHide filename)) -> doUnHide filename
         (Left error) -> putStrLn error
 
-doHide :: StegArg String -> IO ()
-doHide filenames = do
-   files <- getFiles filenames
+doHide :: StegArg File -> IO ()
+doHide _ | trace "doHide" False = undefined
+doHide files = do
    let image = steg files
        encodedImage = image >>= encodeDynamicPng
    case image of
@@ -48,38 +97,30 @@ doHide filenames = do
             LB.writeFile "hidden.png" imgData
         (Left error) -> putStrLn error
 
-doUnHide :: String -> IO ()
-doUnHide filename = do
-   file <- B.readFile filename
-   let image = unsteg file
-       encodedImage = image >>= encodeDynamicPng
-   case encodedImage of
-        (Right imgData) ->
-           LB.writeFile "unhidden.png" imgData
+doUnHide :: File -> IO ()
+doUnHide _ | trace "doUnHide" False = undefined
+doUnHide file = do
+   let unhiddenFile = unsteg file
+   case unhiddenFile of
+        (Right (File name content)) ->
+           LB.writeFile "unhidden.png" content
         (Left error) -> putStrLn error
 
-getFiles :: StegArg String -> IO (StegArg B.ByteString)
-getFiles = sequence . fmap B.readFile
-
-parse :: [String] -> Either String Action
+parse :: [File] -> Either String Action
+parse [] = Left "Usage: ImageSteg  <file to hide>  <file to hide in>"
+parse [file] = Right . UnHide $ file
 parse (fileToHide : fileToHideIn : _) = Right . Hide $ (StegArg fileToHide fileToHideIn)
-parse [fileToUnhide] = Right . UnHide $ fileToUnhide
-parse _ = Left "Usage: ImageSteg  <file to hide>  <file to hide in>"
 
-steg :: StegArg B.ByteString -> Either String DynamicImage
+steg :: StegArg File -> Either String DynamicImage
 steg (StegArg fileToHide fileToHideIn) = do
-   hide <- decodePng fileToHide
-   hidingPlace <- decodePng fileToHideIn
-   store hide hidingPlace
-   where store :: DynamicImage -> DynamicImage -> Either String DynamicImage
-         store (ImageRGBA8 (Image w h v)) (ImageRGBA8 (Image w' h' v')) =
-            let listV = Vec.toList v
-                encodedWidth = intToWord8 w
-                encodedHeight = intToWord8 h
-                augmentedV = encodedWidth ++ encodedHeight ++ listV
-                (usedHiding, unusedHiding) = List.genericSplitAt ((List.length augmentedV) * 4) (Vec.toList v')
+   hidingPlace <- fileToPng fileToHideIn
+   store fileToHide hidingPlace
+   where store :: File -> DynamicImage -> Either String DynamicImage
+         store file (ImageRGBA8 (Image w' h' v')) =
+            let listV = (toWords file)
+                (usedHiding, unusedHiding) = List.genericSplitAt ((List.length listV) * 4) (Vec.toList v')
                 groups = groupify 4 usedHiding
-                zipped = zip augmentedV groups
+                zipped = zip listV groups
                 hidden = map (\ (value, storage) ->
                    let vals = wordToList value in
                        hide vals storage
@@ -88,23 +129,24 @@ steg (StegArg fileToHide fileToHideIn) = do
                 newVec = Vec.fromList newList
                 in
                 Right . ImageRGBA8 $ (Image w' h' newVec)
-         store img (ImageRGBA8 _) = Left ("Image to hide has unsupported file encoding: " ++ (imageToString img))
-         store (ImageRGBA8 _) img = Left ("Image to hide in has unsupported file encoding: " ++ (imageToString img))
+         store _ img = Left ("Image to hide in has unsupported file encoding: " ++ (imageToString img))
 
-unsteg :: B.ByteString -> Either String DynamicImage
-unsteg filename = do
-   file <- decodePng filename
-   return (unhide file)
-   where unhide :: DynamicImage -> DynamicImage
+
+
+unsteg :: File -> Either String File
+unsteg _ | trace "unsteg" False = undefined
+unsteg file = do
+   img <- fileToPng file
+   (_, result) <- unhide img
+   return result
+   where unhide :: DynamicImage -> Either String ([Word8], File)
+         unhide _ | trace "unhide" False = undefined
          unhide (ImageRGBA8 (Image _ _ v)) =
             let listV = Vec.toList v
                 groups = groupify 4 listV
                 words = map unhideWord groups
-                (words', width) = extractInt words
-                (words'', height) = extractInt words'
-                newVec = Vec.fromList words''
                 in
-                ImageRGBA8 (Image width height newVec)
+                fromWords words
 
 wordToList :: Word8 -> [Word8]
 wordToList word = do
