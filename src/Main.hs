@@ -5,10 +5,8 @@ import ImageSteg
 import System.Environment
 import Codec.Picture.Png
 import Codec.Picture.Types
-import qualified Data.List as List
 import Data.Word
 import Data.Bits
-import qualified Data.Vector.Storable as Vec
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as LB
@@ -37,11 +35,11 @@ data File = File { filename :: String
 instance Hideable File where
    toWords file = ( nameLength ++ name ) ++ ( fileLength ++ fileContent )
       where rawName = filename file
-            rawNameLength = List.length rawName
+            rawNameLength = length rawName
             nameLength = intToWord8 rawNameLength
             name = B.unpack . C.pack . take rawNameLength $ rawName
             fileContent = LB.unpack . content $ file
-            fileLength = intToWord8 . List.length $ fileContent
+            fileLength = intToWord8 . length $ fileContent
 
    fromWords [] = Left "Not enough data to reconstruct file"
    fromWords _ | trace "fromWords" False = undefined
@@ -119,11 +117,6 @@ unsteg file = do
    (_, result) <- reveal img
    return result
 
-groupify :: Integral n => n -> [a] -> [[a]]
-groupify n xs = case List.genericSplitAt n xs of
-                    (xs', []) -> [xs']
-                    (xs', rest) -> xs' : (groupify n rest)
-
 intToWord8 :: Int -> [Word8]
 intToWord8 i =
    let totalBits = finiteBitSize i
@@ -135,7 +128,7 @@ intToWord8 i =
 wordsToInt :: [Word8] -> Int
 wordsToInt words =
    let word8bits = finiteBitSize (0 :: Word8)
-       totalWords = List.length words
+       totalWords = length words
        shifts = [(totalWords - 1) * word8bits, ((totalWords - 2) * word8bits)..0]
        wordShifts = (zip words shifts)
        intWords = map (\ (word, shiftVal) -> shift (fromIntegral word) shiftVal) wordShifts
@@ -147,7 +140,7 @@ extractInt words =
    let totalBits = finiteBitSize (0 :: Int)
        word8bits = finiteBitSize (0 :: Word8)
        totalWords = totalBits `quot` word8bits
-       (intWords, rest) = List.genericSplitAt totalWords words
+       (intWords, rest) = splitAt totalWords words
        in
        ( rest, (wordsToInt intWords) )
 
