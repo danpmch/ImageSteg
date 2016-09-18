@@ -9,6 +9,7 @@ import Data.Bits
 import Codec.Picture.Types
 import qualified Data.List as List
 import qualified Data.Vector.Storable as Vec
+import Debug.Trace
 
 class Hideable a where
    toWords :: a -> [Word8]
@@ -16,24 +17,38 @@ class Hideable a where
 
 hide :: Hideable a => a -> DynamicImage -> Either String DynamicImage
 
-hide message (ImageRGBA8 (Image w' h' v')) =
-   Right . ImageRGBA8 $ (Image w' h' newVec)
-   where rawMsg = (toWords message)
-         (usedHiding, unusedHiding) =
-            List.genericSplitAt ((List.length rawMsg) * 4) (Vec.toList v')
-         groups = groupify 4 usedHiding
-         zipped = zip rawMsg groups
-         hidden = map (uncurry hideWord) zipped
-         newList = (concat hidden) ++ unusedHiding
-         newVec = Vec.fromList newList
+hide message (ImageRGBA8 _) | trace "RGBA8 image" False = undefined
+hide message (ImageRGB8 _) | trace "RGB8 image" False = undefined
+hide message (ImageRGBA8 (Image w' h' v')) = do
+   newData <- hideInBuffer message . Vec.toList $ v'
+   return . ImageRGBA8 . (Image w' h') . Vec.fromList $ newData
+
+hide message (ImageRGB8 (Image w' h' v')) = do
+   newData <- hideInBuffer message . Vec.toList $ v'
+   return . ImageRGB8 . (Image w' h') . Vec.fromList $ newData
 
 hide _ img = Left ("Image to hide in has unsupported file encoding: " ++ (imageToString img))
 
+hideInBuffer :: Hideable a => a -> [Word8] -> Either String [Word8]
+hideInBuffer message buffer = Right words
+   where rawMsg = (toWords message)
+         (usedHiding, unusedHiding) =
+            List.genericSplitAt ((List.length rawMsg) * 4) buffer
+         groups = groupify 4 usedHiding
+         zipped = zip rawMsg groups
+         hidden = map (uncurry hideWord) zipped
+         words = (concat hidden) ++ unusedHiding
+
 reveal :: Hideable a => DynamicImage -> Either String ([Word8], a)
-reveal (ImageRGBA8 (Image _ _ v)) =
-   fromWords words
-   where rawMsg = Vec.toList v
-         groups = groupify 4 rawMsg
+reveal (ImageRGBA8 _) | trace "RGBA8 image" False = undefined
+reveal (ImageRGB8 _) | trace "RGB8 image" False = undefined
+reveal (ImageRGBA8 (Image _ _ v)) = revealFromBuffer . Vec.toList $ v
+reveal (ImageRGB8 (Image _ _ v)) = revealFromBuffer . Vec.toList $ v
+reveal img = Left ("Unsupported file format for reveal: " ++ (imageToString img))
+
+revealFromBuffer :: Hideable a => [Word8] -> Either String ([Word8], a)
+revealFromBuffer buffer = fromWords words
+   where groups = groupify 4 buffer
          words = map revealWord groups
 
 hideWord :: Word8 -> [Word8] -> [Word8]
