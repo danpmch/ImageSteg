@@ -3,6 +3,7 @@ module Main where
 import ImageSteg
 
 import System.Environment
+import System.FilePath.Posix
 import Codec.Picture.Png
 import Codec.Picture.Types
 import Data.Word
@@ -96,7 +97,7 @@ doUnHide file = do
    let unhiddenFile = unsteg file
    case unhiddenFile of
         (Right (File name content)) ->
-           LB.writeFile "unhidden.png" content
+           LB.writeFile (takeFileName name) content
         (Left error) -> putStrLn error
 
 parse :: [File] -> Either String Action
