@@ -1,5 +1,7 @@
 module Main where
 
+import ImageSteg
+
 import System.Environment
 import Codec.Picture.Png
 import Codec.Picture.Types
@@ -27,10 +29,6 @@ instance Traversable StegArg where
 
 data Action = Hide (StegArg File)
             | UnHide File
-
-class Hideable a where
-   toWords :: a -> [Word8]
-   fromWords :: [Word8] -> Either String ([Word8], a)
 
 data File = File { filename :: String
                  , content :: LB.ByteString
@@ -89,9 +87,6 @@ doHide _ | trace "doHide" False = undefined
 doHide files = do
    let image = steg files
        encodedImage = image >>= encodeDynamicPng
-   case image of
-        (Right img) -> putStrLn . imageToString $ img
-        _ -> return ()
    case encodedImage of
         (Right imgData) ->
             LB.writeFile "hidden.png" imgData
@@ -114,82 +109,20 @@ parse (fileToHide : fileToHideIn : _) = Right . Hide $ (StegArg fileToHide fileT
 steg :: StegArg File -> Either String DynamicImage
 steg (StegArg fileToHide fileToHideIn) = do
    hidingPlace <- fileToPng fileToHideIn
-   store fileToHide hidingPlace
-   where store :: File -> DynamicImage -> Either String DynamicImage
-         store file (ImageRGBA8 (Image w' h' v')) =
-            let listV = (toWords file)
-                (usedHiding, unusedHiding) = List.genericSplitAt ((List.length listV) * 4) (Vec.toList v')
-                groups = groupify 4 usedHiding
-                zipped = zip listV groups
-                hidden = map (\ (value, storage) ->
-                   let vals = wordToList value in
-                       hide vals storage
-                   ) zipped
-                newList = (concat hidden) ++ unusedHiding
-                newVec = Vec.fromList newList
-                in
-                Right . ImageRGBA8 $ (Image w' h' newVec)
-         store _ img = Left ("Image to hide in has unsupported file encoding: " ++ (imageToString img))
-
+   hide fileToHide hidingPlace
 
 
 unsteg :: File -> Either String File
 unsteg _ | trace "unsteg" False = undefined
 unsteg file = do
    img <- fileToPng file
-   (_, result) <- unhide img
+   (_, result) <- reveal img
    return result
-   where unhide :: DynamicImage -> Either String ([Word8], File)
-         unhide _ | trace "unhide" False = undefined
-         unhide (ImageRGBA8 (Image _ _ v)) =
-            let listV = Vec.toList v
-                groups = groupify 4 listV
-                words = map unhideWord groups
-                in
-                fromWords words
-
-wordToList :: Word8 -> [Word8]
-wordToList word = do
-   bits <- groupify 2 . toBitList $ word
-   return (toWord8 bits)
-
-toWord8 :: [Bool] -> Word8
-toWord8 [False, False] = 0
-toWord8 [False, True] = 1
-toWord8 [True, False] = 2
-toWord8 [True, True] = 3
-toWord8 unknown = error ("toWord8: unexpected input :" ++ (show unknown))
-
-hide :: [Word8] -> [Word8] -> [Word8]
-hide ws @ [w1, w2, w3, w4] rgbs @ [r, g, b, a] =
-   map (\ (w, rgb) -> (truncateWord rgb) + w) (zip ws rgbs)
-hide ws [r, g, b, a] = error ("hide: Wrong number of values to hide: " ++ (show . List.length $ ws))
-hide [w1, w2, w3, w4] rgba = error ("hide: Wrong number of values to hide in: " ++ (show . List.length $ rgba))
-
-unhideWord :: [Word8] -> Word8
-unhideWord words @ [w1, w2, w3, w4] =
-   let lowBits = map (.&. 3) words
-       shifts = (shift `map` lowBits) `zip` [6,4,2,0]
-       shiftedBits = map (\ (shiftFunc, shift) -> shiftFunc shift) shifts
-       in
-       sum shiftedBits
-unhideWord words = error ("listToWord: unexpected number of words: " ++ (show . List.length $ words))
-
-
-truncateWord :: Word8 -> Word8
-truncateWord w = w .&. (complement 3)
 
 groupify :: Integral n => n -> [a] -> [[a]]
 groupify n xs = case List.genericSplitAt n xs of
                     (xs', []) -> [xs']
                     (xs', rest) -> xs' : (groupify n rest)
-
-toBitList :: FiniteBits a => a -> [Bool]
-toBitList w = let size = finiteBitSize w in
-               do
-                  index <- [size - 1, (size - 2)..0]
-                  let bit = testBit w index
-                  return bit
 
 intToWord8 :: Int -> [Word8]
 intToWord8 i =
@@ -217,19 +150,4 @@ extractInt words =
        (intWords, rest) = List.genericSplitAt totalWords words
        in
        ( rest, (wordsToInt intWords) )
-
-
-imageToString :: DynamicImage -> String
-imageToString (ImageY8 _) = "ImageY8"
-imageToString (ImageY16 _) = "ImageY16"
-imageToString (ImageYF _) = "ImageYF"
-imageToString (ImageYA8 _) = "ImageYA8"
-imageToString (ImageYA16 _) = "ImageYA16"
-imageToString (ImageRGB8 _) = "ImageRGB8"
-imageToString (ImageRGB16 _) = "ImageRGB16"
-imageToString (ImageRGBF _) = "ImageRGBF"
-imageToString (ImageRGBA8 _) = "ImageRGBA8"
-imageToString (ImageRGBA16 _) = "ImageRGBA16"
-imageToString (ImageCMYK8 _) = "ImageCMYK8"
-imageToString (ImageCMYK16 _) = "ImageCMYK16"
 

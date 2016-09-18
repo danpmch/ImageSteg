@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 executable ImageSteg
   main-is:             Main.hs
-  -- other-modules:       
+  other-modules:       ImageSteg
   -- other-extensions:    
   build-depends:       base >=4.9 && <4.10, JuicyPixels >=3.2 && <3.3, bytestring, vector
   hs-source-dirs:      src
